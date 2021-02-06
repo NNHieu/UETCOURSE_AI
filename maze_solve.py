@@ -124,64 +124,94 @@ class Environment:
         return x, y, d, v,  2 + int(sqrt(v))
 
     def no_action(self, x, y, d, v):
+        x, y = self._next_position(x, y, d, v)
         return x, y, d, v,  1 + int(sqrt(v))
 
 
 class Solver:
     def __init__(self,env: Environment) -> None:
         self.env = env
+        self.found = None
 
-    def act_and_add_state(self, act, x0, y0, d0, v0, cur_cost, is_ucf=False):
-        x, y, d, v, step_cost = act(x0, y0, d0, v0)
+    def act_and_add_state(self, act, prev_state, cur_cost, is_ucf=False):
+        x, y, d, v, step_cost = act(*prev_state)
+        if cur_cost == -1:
+            prev_state = None # Init state
         if x < 0 or y < 0: # Invalid action
             return None
         cur_cost += step_cost if is_ucf else 1
-        for state in self.table[y][x]: # Check already explored
-            if  d == state[0] and v == state[1]:
-                if cur_cost < state[2]: 
-                    state[2] = cur_cost
-                    state[3] = (x0, y0, d0, v0)
-                    raise RuntimeError # Expect not happend in UCF and BFS
+        s = (x, y, d, v)
+        # Fast stop
+        if self.env.goal == (x, y) and v == 0:
+            self.path[s] = prev_state
+            self.found = cur_cost, s
+            return None
+        
+        if s in self.seen:
+            return None
+
+        if is_ucf:
+            # Not sure min path to s
+            prev_min_cost = self.mins.get(s, None)
+            if prev_min_cost is None or prev_min_cost > cur_cost:
+                self.mins[s] = cur_cost
+                self.path[s] = prev_state
+                return *s, cur_cost
+            else:
                 return None
-        self.table[y][x].append((d, v, cur_cost, (x0, y0, d0, v0))) # Save footprint
+        else:
+            # Sure min path to s
+            p = self.path.get(s, None)
+            if p is not None: 
+                return None
+            self.path[s] = prev_state
         return x, y, d, v, cur_cost
 
-    def step(self, x, y, d, v, cost, is_ucf):
-        # print("step:", num_step, x, y, d, v)
-        explode_fn = self.explore_ucf if is_ucf else self.explore_bfs
-        if self.env.goal == (x, y) and v == 0:
-            return cost, (x, y, d, v)
+    def explore(self, s, cost, is_ucf):
+        if s in self.seen:
+            return -1, None
+        self.seen.add(s)
+
+        if self.found is not None:  # Fast stop
+            return self.found
+        # print("step:", num_step, s)
+        step_fn = self.step_ucf if is_ucf else self.step_bfs
         # Action
+        v = s[-1]
         if v == 0:
-            explode_fn(self.env.turn_left, x, y, d, v, cost)
-            explode_fn(self.env.turn_right, x, y, d, v, cost)
-            explode_fn(self.env.speed_up, x, y, d, v, cost)
+            step_fn(self.env.turn_left, s, cost)
+            step_fn(self.env.turn_right, s, cost)
+            step_fn(self.env.speed_up, s, cost)
         else:
-            explode_fn(self.env.no_action, x, y, d, v, cost)
-            explode_fn(self.env.slow_down, x, y, d, v, cost)
+            step_fn(self.env.no_action, s, cost)
+            step_fn(self.env.slow_down, s, cost)
             if v < self.env.vmax:
-                explode_fn(self.env.speed_up, x, y, d, v, cost)
+                step_fn(self.env.speed_up, s, cost)
         return -1, None
     
-    def explore_bfs(self, act, x0, y0, d0, v0, total_cost):
-        ret = self.act_and_add_state(act, x0, y0, d0, v0, total_cost, is_ucf=False)
+    def step_bfs(self, act, s, total_cost):
+        ret = self.act_and_add_state(act, s, total_cost, is_ucf=False)
         if ret is None:
             return # Already explored or invalid action
         x, y, d, v, cur_cost = ret
-        self.Q.put(partial(self.step, x, y, d, v, cur_cost, False))
+        new_s = (x, y, d, v)
+        self.Q.put(partial(self.explore, new_s, cur_cost, False))
 
-    def explore_ucf(self, act, x0, y0, d0, v0, total_cost):
-        ret = self.act_and_add_state(act, x0, y0, d0, v0, total_cost, is_ucf=True)
+    def step_ucf(self, act, s, total_cost):
+        ret = self.act_and_add_state(act, s, total_cost, is_ucf=True)
         if ret is None:
             return # Already explored or invalid action
         x, y, d, v, cur_cost = ret
-        heapq.heappush(self.Q, (cur_cost, (x, y, d, v), partial(self.step, x, y, d, v, cur_cost, True)))
+        new_s = (x, y, d, v)
+        heapq.heappush(self.Q, (cur_cost, new_s, partial(self.explore, new_s, cur_cost, True)))
 
     def solve_bfs(self):
         self.Q = Queue()
-        self.table = [[[] for i in range(self.env.N)] for i in range(self.env.N)]
+        self.seen = set()
+        self.path = dict()
+        # self.mins = dict()
         x0, y0 = self.env.start
-        self.step(x0, y0, 0, 0, 0, False)
+        self.step_bfs(self.env.no_action, (x0, y0, 0, 0), -1)
         ans = -1
         last_state = None
         while ans == -1 and not self.Q.empty():
@@ -190,9 +220,11 @@ class Solver:
     
     def solve_ucf(self):
         self.Q = []
-        self.table = [[[] for i in range(self.env.N)] for i in range(self.env.N)]
+        self.seen = set()
+        self.path = dict()
+        self.mins = dict()
         x0, y0 = self.env.start
-        self.step(x0, y0, 0, 0, 0, True)
+        self.step_ucf(self.env.no_action,(x0, y0, 0, 0), -1)
         ans = -1
         last_state = None
         while ans == -1 and len(self.Q) > 0:
@@ -204,22 +236,21 @@ def trace_back(solver, x, y, d, v, image):
     path = [(x, y, d, v)]
     draw = ImageDraw.Draw(image)
     scale_factor = solver.env.scale_factor
-    while x != solver.env.start[0] or y != solver.env.start[1] or d != 0 or v != 0:
-        for s in solver.table[y][x]:
-            if s[0] == d and s[1] == v:
-                draw.line([(x * scale_factor, y * scale_factor), (s[-1][0] * scale_factor, s[-1][1] * scale_factor)], fill='black', width=int(max(scale_factor / 2 , 1)))
-                x, y, d, v = s[-1]
-                # print(x, y, d, v)
-                path.append(s[-1])
-                break
+    prev_state = solver.path[path[-1]]
+    while prev_state != None:
+        path.append(prev_state)
+        draw.line([(x * scale_factor, y * scale_factor), (prev_state[0] * scale_factor, prev_state[1] * scale_factor)], fill='black', width=int(max(scale_factor / 2 , 1)))
+        x, y, d, v = prev_state
+        prev_state = solver.path[prev_state]
     return path
 
 #%%
 if __name__ ==  "__main__":
     method, inputmap = sys.argv[1:3]
     method = method.lower()
+    # method = 'ucf'
     assert method in ('ucf', 'bfs')
-
+    # inputmap='car_large'
     env = Environment()
     env.read_map(inputmap)
     env.image.show()
@@ -229,9 +260,10 @@ if __name__ ==  "__main__":
     print("solving ...")
     start = time.time()
     ans, last_state = solver.solve_ucf() if method == 'ucf' else solver.solve_bfs()
-    
+    print('Min cost', ans, 'Done in', time.time() - start)
+    print('Tracing...')
     path = trace_back(solver, *last_state, env.image)
-    print('Min cost:', ans, 'Num step:', len(path) - 1, 'Done in', time.time() - start)
+    print('Num step:', len(path) - 1)
     print('Found path:')
     for s in reversed(path):
         print('->',s)
