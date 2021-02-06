@@ -1,0 +1,9 @@
+cac ban trong sang nay, ban nao tim dc duong di ngan nhat = bfs, voi ucs thì gửi kết quả về cho mình
+theo email cuongtv@vnu.edu.vn + code
+car_large.in
+100x100
+3000 walls
+bfs, tính step = số action
+ucs, tính cost = 1 + sqrt(v), xe k làm hành động
+nếu có thực hiện hành động 2 + int(sqrt(v)), với v là vận tốc hiện tại
+1 + int(sqrt(v))
