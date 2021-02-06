@@ -32,7 +32,7 @@ class Environment:
             
             # Map image
             self.image = Image.new('RGB', (600, 600), color='white')
-            self.scale_factor = 600 / (self.N - 1)
+            self.scale_factor = 600 / (self.N - 0.5)
             draw = ImageDraw.Draw(self.image)
             
             self.start = (xs, ys)
